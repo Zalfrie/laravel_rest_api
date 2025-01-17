@@ -23,25 +23,44 @@ class UserController extends Controller
             'name' => 'required|string|min:3|max:50',
         ]);
 
-        // Create user
-        $user = User::create([
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'name' => $validated['name'],
-        ]);
+        // Start a database transaction to ensure atomicity
+        \DB::beginTransaction();
 
-        // Send emails
-        Mail::to($user->email)->send(new \App\Mail\AccountCreated($user));
-        Mail::to(config('mail.admin_email'))->send(new \App\Mail\NewUserNotification($user));
+        try {
+            // Create user
+            $user = User::create([
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'name' => $validated['name'],
+            ]);
 
-        // Return response
-        return response()->json([
-            'id' => $user->id,
-            'email' => $user->email,
-            'name' => $user->name,
-            'created_at' => $user->created_at,
-        ], 201);
+            // Create an initial order for the user (or multiple if needed)
+            $initialOrders = [
+                ['user_id' => $user->id, 'created_at' => now()],
+            ];
+            Order::insert($initialOrders);
+
+            // Commit the transaction
+            \DB::commit();
+
+            // Send emails
+            Mail::to($user->email)->send(new \App\Mail\AccountCreated($user));
+            Mail::to(config('mail.admin_email'))->send(new \App\Mail\NewUserNotification($user));
+
+            // Return response
+            return response()->json([
+                'id' => $user->id,
+                'email' => $user->email,
+                'name' => $user->name,
+                'created_at' => $user->created_at,
+            ], 201);
+        } catch (\Exception $e) {
+            // Rollback the transaction in case of an error
+            \DB::rollBack();
+            return response()->json(['error' => 'User creation failed.'], 500);
+        }
     }
+
 
     /**
      * @param Request $request
